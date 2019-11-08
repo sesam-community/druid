@@ -389,7 +389,7 @@ if __name__ == '__main__':
         'environment': 'production',
         'engine.autoreload_on': False,
         'log.screen': True,
-        'server.socket_port': 5001,
+        'server.socket_port': 5000,
         'server.socket_host': '0.0.0.0'
     })
 
