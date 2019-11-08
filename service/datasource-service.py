@@ -71,7 +71,7 @@ def get_env(var):
 
 druid_server = get_env("druid_server") or "druid:8082"
 druid_indexer = get_env("druid_indexer") or "druid:8081"
-druid_sink = get_env("druid_sink") or "druid-sink:5000"
+druid_sink = get_env("druid_sink") or "http://druid-sink:5000"
 
 logger = None
 
@@ -128,11 +128,13 @@ def requires_auth(f):
     return decorated
 
 
-@app.route('/<datatype>', methods=['GET'])
-def bulk_read(datatype):
+@app.route('/', methods=['GET'])
+def bulk_read():
+    datatype = get_var("datatype")
     app.logger.info("Delivering data to Druid: %s" % (datatype))
-
     if datatype not in bulk_expose_data:
+        app.logger.info("Cant find: %s" % (datatype))
+        app.logger.info("wee have the following data: %s" % (bulk_expose_data))
         abort(404)
 
     def get_data():
@@ -327,7 +329,8 @@ def store_file(data, datatype, time_dim, float_sum, is_full, is_first, is_last, 
         index_task["spec"]["dataSchema"]["parser"]["parseSpec"]["timestampSpec"]["column"] = time_dim
         index_task["spec"]["dataSchema"]["granularitySpec"]["queryGranularity"] = aggregate
         index_task["spec"]["dataSchema"]["granularitySpec"]["segmentGranularity"] = segment
-        index_task["spec"]["ioConfig"]["firehose"]["uris"]= ["http://druid-sink:5000/%s" % datatype_name]
+        index_task["spec"]["ioConfig"]["firehose"]["uris"]= ["%s?datatype=%s" % (druid_sink, datatype_name)]
+        app.logger.info("Setting up firehose to read from: %s" % (json.dumps(index_task["spec"]["ioConfig"]["firehose"]["uris"])))
         for k in float_sum:
             index_task["spec"]["dataSchema"]["metricsSpec"].append({ "type":"doubleSum", "name": k, "fieldName": k })
         if is_full:
