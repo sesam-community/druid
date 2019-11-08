@@ -3,6 +3,7 @@ from functools import wraps
 import copy
 from time import sleep
 
+import cherrypy
 from flask import Flask, request, Response, abort, stream_with_context
 import datetime
 import requests
@@ -381,5 +382,17 @@ if __name__ == '__main__':
     data_location += "druid_tempfiles/"
     clean_folder(data_location)
 
-    app.run(debug=True, host='0.0.0.0')
+    cherrypy.tree.graft(app, '/')
 
+    # Set the configuration of the web server to production mode
+    cherrypy.config.update({
+        'environment': 'production',
+        'engine.autoreload_on': False,
+        'log.screen': True,
+        'server.socket_port': 5001,
+        'server.socket_host': '0.0.0.0'
+    })
+
+    # Start the CherryPy WSGI web server
+    cherrypy.engine.start()
+    cherrypy.engine.block()
