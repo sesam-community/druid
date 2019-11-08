@@ -140,11 +140,15 @@ def bulk_read():
 
     def get_data():
         data = bulk_expose_data[datatype]
-        if os.path.isfile(data):
-            with open(data, "r") as f:
-                for line in f:
-                    yield line
-
+        if data_location != "RAM":
+            if os.path.isfile(data):
+                with open(data, "r") as f:
+                    for line in f:
+                        yield line
+        else:
+            for line in data:
+                yield line
+                
     return Response(stream_with_context(get_data()), mimetype='text/plain')
 
 
@@ -377,10 +381,11 @@ if __name__ == '__main__':
     logger.setLevel(logging.DEBUG)
 
     data_location = get_var("datastore") or "/data/"
-    if not data_location.endswith("/"):
-        data_location += "/"
-    data_location += "druid_tempfiles/"
-    clean_folder(data_location)
+    if data_location != "RAM":
+        if not data_location.endswith("/"):
+            data_location += "/"
+        data_location += "druid_tempfiles/"
+        clean_folder(data_location)
 
     cherrypy.tree.graft(app, '/')
 
