@@ -78,8 +78,6 @@ druid_server = get_env("druid_server") or "druid:8082"
 druid_indexer = get_env("druid_indexer") or "druid:8081"
 druid_sink = get_env("druid_sink") or "http://druid-sink:5000"
 
-logger = None
-
 bulk_expose_data = {}
 
 data_location = ""
