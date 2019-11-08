@@ -4,6 +4,8 @@ import copy
 from time import sleep
 
 import cherrypy
+import logging
+import paste.translogger
 from flask import Flask, request, Response, abort, stream_with_context
 import datetime
 import requests
@@ -15,6 +17,8 @@ import logging
 from pathlib import Path
 
 app = Flask(__name__)
+
+logger = logging.getLogger('druid-microservice')
 
 index_template = {
     "type": "index",
@@ -366,15 +370,21 @@ def store_file(data, datatype, time_dim, float_sum, is_full, is_first, is_last, 
 
 if __name__ == '__main__':
     # Set up logging
-    format_string = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    logger = logging.getLogger('druid-microservice')
 
-    # Log to stdout
+    format_string = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+    # Log to stdout, change to or add a (Rotating)FileHandler to log to a file
     stdout_handler = logging.StreamHandler()
     stdout_handler.setFormatter(logging.Formatter(format_string))
     logger.addHandler(stdout_handler)
 
-    logger.setLevel(logging.DEBUG)
+    # Comment these two lines if you don't want access request logging
+    app.wsgi_app = paste.translogger.TransLogger(app.wsgi_app, logger_name=logger.name,
+                                                 setup_console_handler=False)
+    app.logger.addHandler(stdout_handler)
+
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
 
     data_location = get_var("datastore") or "/data/"
     if not data_location.endswith("/"):
