@@ -136,10 +136,10 @@ def requires_auth(f):
 @app.route('/', methods=['GET'])
 def bulk_read():
     datatype = get_var("datatype")
-    app.logger.info("Delivering data to Druid: %s" % (datatype))
+    logger.info("Delivering data to Druid: %s" % (datatype))
     if datatype not in bulk_expose_data:
-        app.logger.info("Cant find: %s" % (datatype))
-        app.logger.info("wee have the following data: %s" % (bulk_expose_data))
+        logger.info("Cant find: %s" % (datatype))
+        logger.info("wee have the following data: %s" % (bulk_expose_data))
         abort(404)
 
     def get_data():
@@ -158,7 +158,7 @@ def receiver(datatype):
     # get entities from request and write each of them to a file
     #data = request.get_data(True,True).replace("false","0").replace("true","1")
     global data_location
-    app.logger.info("Got request with args: %s" % (request.args))
+    logger.info("Got request with args: %s" % (request.args))
     time_dim = get_var("timestamp") or "_ts"
     data_location = get_var("datastore") or "/data/"
     is_full = get_var("is_full") or False
@@ -174,8 +174,8 @@ def receiver(datatype):
         data_location += "/"
     data_location += "druid_tempfiles/"
     entities = request.get_json()
-    app.logger.info("Updating entity of type %s" % (datatype))
-    #app.logger.debug(json.dumps(entities))
+    logger.info("Updating entity of type %s" % (datatype))
+    #logger.debug(json.dumps(entities))
     #auth = request.authorization
     #token, username = auth.username.split('\\', 1)
     segments = []
@@ -184,21 +184,21 @@ def receiver(datatype):
     if kill and is_first and is_full:
         r = requests.delete('http://%s/druid/coordinator/v1/datasources/%s' % (druid_indexer, datatype))
         if r.status_code < 400:
-            app.logger.info("Disable datatype %s in Druid. Response: %s - %s" % (datatype, r.status_code, r.reason))
+            logger.info("Disable datatype %s in Druid. Response: %s - %s" % (datatype, r.status_code, r.reason))
             r = requests.get('http://%s/druid/coordinator/v1/datasources/%s/segments' % (druid_indexer, datatype))
             if r.status_code == 200:
-                app.logger.info("Got segments for datatype %s in Druid. Response:  %s - %s" % (datatype, r.status_code, r.reason))
+                logger.info("Got segments for datatype %s in Druid. Response:  %s - %s" % (datatype, r.status_code, r.reason))
                 result = r.json()
                 for i in result:
                     r = requests.delete('http://%s/druid/coordinator/v1/datasources/%s/segments/%s' % (druid_indexer, datatype, i.replace("/","_")))
-                    app.logger.info("Disable segment %s in Druid. Response: %s" % (i, r.content))
+                    logger.info("Disable segment %s in Druid. Response: %s" % (i, r.content))
             r = requests.get('http://%s/druid/coordinator/v1/datasources/%s/intervals' % (druid_indexer, datatype))
             if r.status_code == 200:
-                app.logger.info("Got intervals for datatype %s in Druid. Response:  %s - %s" % (datatype, r.status_code, r.reason))
+                logger.info("Got intervals for datatype %s in Druid. Response:  %s - %s" % (datatype, r.status_code, r.reason))
                 result = r.json()
                 for i in result:
                     r = requests.delete('http://%s/druid/coordinator/v1/datasources/%s/intervals/%s' % (druid_indexer, datatype, i.replace("/","_")))
-                    app.logger.info("Disable interval %s in Druid. Response: %s" % (i, r.content))
+                    logger.info("Disable interval %s in Druid. Response: %s" % (i, r.content))
                 while  len(result) > 0:
                     result = []
                     sleep(30)
@@ -206,21 +206,21 @@ def receiver(datatype):
                         'http://%s/druid/coordinator/v1/datasources/%s/segments' % (druid_indexer, datatype))
                     if r.status_code == 200:
                         result = r.json()
-                        app.logger.info("Waiting for deletion of all segments for datatype %s in Druid. Current number of segments:  %s" % (
+                        logger.info("Waiting for deletion of all segments for datatype %s in Druid. Current number of segments:  %s" % (
                              datatype, len(result)))
 
         else:
-            app.logger.info("Datatype %s does not exist in Druid. Response: %s - %s" % (datatype, r.status_code, r.reason))
+            logger.info("Datatype %s does not exist in Druid. Response: %s - %s" % (datatype, r.status_code, r.reason))
     elif not is_full:
         r = requests.get('http://%s/druid/coordinator/v1/datasources/%s/segments?full' % (druid_indexer, datatype))
         if r.status_code == 200:
-            app.logger.info(
+            logger.info(
                 "Got segments for datatype %s in Druid. Response:  %s - %s" % (datatype, r.status_code, r.reason))
             result = r.json()
             segments = result
         r = requests.get('http://%s/druid/coordinator/v1/datasources/%s/intervals' % (druid_indexer, datatype))
         if r.status_code == 200:
-            app.logger.info("Got intervals for datatype %s in Druid. Response:  %s - %s" % (datatype, r.status_code, r.reason))
+            logger.info("Got intervals for datatype %s in Druid. Response:  %s - %s" % (datatype, r.status_code, r.reason))
             result = r.json()
             intervals = result
 
@@ -256,7 +256,7 @@ def transform(datatype, entities, time_dim, is_full, is_first, is_last, sequence
     stream_data = []
     c = []
     ct = {}
-    #app.logger.info("Updating schema from type %s" % (datatype))
+    #logger.info("Updating schema from type %s" % (datatype))
 
     for ent in listing:
         if "_deleted" in ent and ent["_deleted"] is True:
@@ -301,7 +301,7 @@ def transform(datatype, entities, time_dim, is_full, is_first, is_last, sequence
 
 def store_db(data, datatype):
     r = requests.post('http://%s/v1/post/%s' % (druid_server,datatype), json=data)
-    app.logger.info("Sucsessfully posted data to Druid: %s" % (r.content))
+    logger.info("Sucsessfully posted data to Druid: %s" % (r.content))
     return r.content
 
 def store_file(data, datatype, time_dim, float_sum, is_full, is_first, is_last, sequence_id, aggregate, segment, segments, intervals, write_data):
@@ -335,7 +335,7 @@ def store_file(data, datatype, time_dim, float_sum, is_full, is_first, is_last, 
         index_task["spec"]["dataSchema"]["granularitySpec"]["queryGranularity"] = aggregate
         index_task["spec"]["dataSchema"]["granularitySpec"]["segmentGranularity"] = segment
         index_task["spec"]["ioConfig"]["firehose"]["uris"]= ["%s?datatype=%s" % (druid_sink, datatype_name)]
-        app.logger.info("Setting up firehose to read from: %s" % (json.dumps(index_task["spec"]["ioConfig"]["firehose"]["uris"])))
+        logger.info("Setting up firehose to read from: %s" % (json.dumps(index_task["spec"]["ioConfig"]["firehose"]["uris"])))
         for k in float_sum:
             index_task["spec"]["dataSchema"]["metricsSpec"].append({ "type":"doubleSum", "name": k, "fieldName": k })
         if is_full:
@@ -357,13 +357,13 @@ def store_file(data, datatype, time_dim, float_sum, is_full, is_first, is_last, 
             index_task["spec"]["ioConfig"]["firehose"] = firehouse
 
 
-        app.logger.info("Task to send to to Druid: %s" % (json.dumps(index_task)))
+        logger.info("Task to send to to Druid: %s" % (json.dumps(index_task)))
         r = requests.post('http://%s/druid/indexer/v1/task' %(druid_indexer), json=index_task)
         result = r.json()
         if "task" in result:
-            app.logger.info("Success in getting Task for request sent to Druid. Responce: %s" % (r.content))
+            logger.info("Success in getting Task for request sent to Druid. Responce: %s" % (r.content))
         else:
-            app.logger.error("Problem with request sent to Druid. Responce: %s" % (r.content))
+            logger.error("Problem with request sent to Druid. Responce: %s" % (r.content))
             abort()
 
     return datatype_name
@@ -381,7 +381,7 @@ if __name__ == '__main__':
     # Comment these two lines if you don't want access request logging
     app.wsgi_app = paste.translogger.TransLogger(app.wsgi_app, logger_name=logger.name,
                                                  setup_console_handler=False)
-    app.logger.addHandler(stdout_handler)
+    logger.addHandler(stdout_handler)
 
     logger.propagate = False
     logger.setLevel(logging.INFO)
