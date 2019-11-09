@@ -133,8 +133,9 @@ def requires_auth(f):
 
 @app.route('/', methods=['GET'])
 def bulk_read():
+    global data_location
     datatype = get_var("datatype")
-    logger.info("Delivering data to Druid: %s" % (datatype))
+    logger.info("Delivering data from %s to Druid: %s" % (data_location, datatype))
     if datatype not in bulk_expose_data:
         logger.info("Cant find: %s" % (datatype))
         logger.info("wee have the following data: %s" % (bulk_expose_data))
@@ -146,12 +147,13 @@ def bulk_read():
             if os.path.isfile(data):
                 with open(data, "r") as f:
                     for line in f:
+                        logger.debug(line)
                         yield line
         else:
-            for line in data:
-                yield line
+            logger.debug("Data: %s" % (data))
+            return data
 
-    return Response(stream_with_context(get_data()), mimetype='text/plain')
+    return Response(get_data(), mimetype='text/plain')
 
 
 @app.route('/<datatype>', methods=['POST'])
@@ -163,6 +165,12 @@ def receiver(datatype):
     logger.info("Got request with args: %s" % (request.args))
     time_dim = get_var("timestamp") or "_ts"
     data_location = get_var("datastore") or "/data/"
+    if data_location != "RAM":
+        if not data_location.endswith("/"):
+            data_location += "/"
+        data_location += "druid_tempfiles/"
+        clean_folder(data_location)
+
     is_full = get_var("is_full") or False
     is_first = get_var("is_first") or False
     kill = get_var("kill") or False
@@ -172,9 +180,6 @@ def receiver(datatype):
     aggregate = get_var("aggregate") or "none"
     segment = get_var("segment") or "YEAR"
 
-    if not data_location.endswith("/"):
-        data_location += "/"
-    data_location += "druid_tempfiles/"
     entities = request.get_json()
     logger.info("Updating entity of type %s" % (datatype))
     #logger.debug(json.dumps(entities))
@@ -321,12 +326,17 @@ def store_file(data, datatype, time_dim, float_sum, is_full, is_first, is_last, 
                 json.dump(line, f, ensure_ascii=True)
                 f.write("\n")
             bulk_expose_data[datatype_name] = data_location + datatype_name
+            logger.debug("Stored data in FILE: %s" % (bulk_expose_data[datatype_name]))
     else:
         with io.StringIO() as f:
             for line in data:
                 json.dump(line, f, ensure_ascii=True)
                 f.write("\n")
-            bulk_expose_data[datatype_name] = f.getvalue()
+            if datatype_name in bulk_expose_data:
+                bulk_expose_data[datatype_name] = bulk_expose_data[datatype_name] + f.getvalue()
+            else:
+                bulk_expose_data[datatype_name] = f.getvalue()
+            logger.debug("Got data in RAM: %s" % (bulk_expose_data[datatype_name]))
 
 
 
