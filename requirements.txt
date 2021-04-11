@@ -1,7 +1,8 @@
 iso8601==0.1.12
-pytz==2019.3
-requests==2.20.1
-Flask==1.1.1
 cheroot==8.2.0
 CherryPy==18.3.0
 Paste==2.0.3
+Flask
+iso8601
+requests
+pytz

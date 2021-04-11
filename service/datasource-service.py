@@ -34,6 +34,7 @@ index_template = {
               "format": "iso"
             },
             "dimensionsSpec" : {
+                "dimensions":[],
                 "dimensionExclusion" : [
                 ]
             }
@@ -50,7 +51,8 @@ index_template = {
       "ioConfig": {
         "type": "index",
         "firehose": {
-          "fetchTimeout": 300000,
+          "fetchTimeout": 21700000,
+          "maxFetchRetry": 1,
           "type": "http",
           "uris": [
             "<FILL IN URL>"
@@ -79,6 +81,8 @@ druid_indexer = get_env("druid_indexer") or "druid:8081"
 druid_sink = get_env("druid_sink") or "http://druid-sink:5000"
 
 bulk_expose_data = {}
+bulk_expose_schema = {}
+bulk_expose_schema = {}
 
 data_location = ""
 
@@ -104,7 +108,7 @@ def get_var(var):
         envvar = os.environ[var.upper()]
     elif request:
         envvar = request.args.get(var)
-    logger.info("Setting %s = %s" % (var, envvar))
+    logger.debug("Setting %s = %s" % (var, envvar))
     if isinstance(envvar, str):
         if envvar.lower() == "true":
             envvar = True
@@ -135,25 +139,37 @@ def requires_auth(f):
 def bulk_read():
     global data_location
     datatype = get_var("datatype")
-    logger.info("Delivering data from %s to Druid: %s" % (data_location, datatype))
-    if datatype not in bulk_expose_data:
-        logger.info("Cant find: %s" % (datatype))
-        logger.info("wee have the following data: %s" % (bulk_expose_data))
-        abort(404)
 
-    def get_data():
-        data = bulk_expose_data[datatype]
-        if data_location != "RAM":
-            if os.path.isfile(data):
-                with open(data, "r") as f:
-                    for line in f:
-                        logger.debug(line)
-                        yield line
+    if data_location != "RAM":
+        data = data_location + datatype
+
+        def get_data():
+            with open(data, "r") as f:
+                for line in f:
+                    logger.debug(line)
+                    yield line
+
+
+        if os.path.isfile(data):
+            logger.info("Delivering %s data from DISK: %s" % (datatype, data))
+            return Response(stream_with_context(get_data()), mimetype='text/plain')
+
         else:
-            logger.debug("Data: %s" % (data))
-            return data
+            NoData(datatype)
 
-    return Response(get_data(), mimetype='text/plain')
+    else:
+        if datatype not in bulk_expose_data:
+            NoData(datatype)
+        data = bulk_expose_data[datatype]
+        logger.info("Delivering %s from RAM: %s bytes of type %s" % (datatype, len(data), type(data)))
+        logger.debug(data)
+        return Response(data, content_type="text/plain; charset=utf-8")
+
+
+def NoData(datatype):
+    app.logger.info("Cant find: %s" % (datatype))
+    app.logger.info("wee have the following data: %s" % (bulk_expose_data))
+    abort(404)
 
 
 @app.route('/<datatype>', methods=['POST'])
@@ -169,9 +185,9 @@ def receiver(datatype):
         if not data_location.endswith("/"):
             data_location += "/"
         data_location += "druid_tempfiles/"
-        clean_folder(data_location)
 
     is_full = get_var("is_full") or False
+    append = get_var("append") or False
     is_first = get_var("is_first") or False
     kill = get_var("kill") or False
     write_data = get_var("write_data") or True
@@ -179,10 +195,18 @@ def receiver(datatype):
     sequence_id = get_var("sequence_id") or False
     aggregate = get_var("aggregate") or "none"
     segment = get_var("segment") or "YEAR"
+    loglevel = get_var("loglevel") or "INFO"
+
+    if loglevel == "DEBUG":
+        logger.setLevel(logging.DEBUG)
+    if loglevel == "INFO":
+        logger.setLevel(logging.INFO)
+    if loglevel == "WARN":
+        logger.setLevel(logging.WARNING)
 
     entities = request.get_json()
-    logger.info("Updating entity of type %s" % (datatype))
-    #logger.debug(json.dumps(entities))
+    app.logger.debug("Updating entity of type %s" % (datatype))
+    #app.logger.debug(json.dumps(entities))
     #auth = request.authorization
     #token, username = auth.username.split('\\', 1)
     segments = []
@@ -231,9 +255,9 @@ def receiver(datatype):
             result = r.json()
             intervals = result
 
-    return Response(transform(datatype, entities, time_dim, is_full, is_first, is_last, sequence_id, aggregate, segment, segments, intervals, write_data), mimetype='text/plain')
+    return Response(transform(datatype, entities, time_dim, is_full, append, is_first, is_last, sequence_id, aggregate, segment, segments, intervals, write_data), mimetype='text/plain')
 
-def transform(datatype, entities, time_dim, is_full, is_first, is_last, sequence_id, aggregate, segment, segments, intervals, write_data):
+def transform(datatype, entities, time_dim, is_full, append, is_first, is_last, sequence_id, aggregate, segment, segments, intervals, write_data):
     global ids
     global data_location
 
@@ -242,14 +266,25 @@ def transform(datatype, entities, time_dim, is_full, is_first, is_last, sequence
 
     datatype_name = "%s-%s" % (datatype, sequence_id)
     file_name = data_location + datatype_name + "-float_sum"
+    file_name_str = data_location + datatype_name + "-string"
     os.makedirs(data_location, exist_ok=True)
     my_file = Path(file_name)
 
-    float_sum = []
-    if my_file.is_file():
+    unhandeled_prop = set([])
+
+    float_sum = set([])
+    if not is_first and my_file.is_file():
         with open(file_name, "r") as f:
             for line in f:
-                float_sum.append(line.strip())
+                float_sum.add(line.strip())
+
+    my_file = Path(file_name_str)
+
+    str_field = set([])
+    if not is_first and my_file.is_file():
+        with open(file_name_str, "r") as f:
+            for line in f:
+                str_field.add(line.strip())
 
     c = None
     listing = []
@@ -284,26 +319,74 @@ def transform(datatype, entities, time_dim, is_full, is_first, is_last, sequence
         if "$ids" not in new or new["$ids"] == "":
             new["$ids"] = "~:%s" % new["_id"]
 
-        for k,v in new.items():
-            if type(v) is str:
-                if v.startswith("~f"):
-                    if k not in float_sum:
-                        float_sum.append(k)
-                    new[k] = float(v.replace("~f",""))
-                if v.startswith("~t"):
-                    new[k] = v.replace("~t", "")
-            elif type(v) is int:
-                if k not in float_sum:
-                    float_sum.append(k)
+        for k,value in new.items():
+            try:
+                if type(value) is not list:
+                    value = [value]
+                nv = []
+                for v in value:
+                    if type(v) is str:
+                        if v.startswith("~f"):
+                            float_sum.add(k)
+                            nv.append(float(v.replace("~f","")))
+                        elif v.startswith("~t"):
+                            str_field.add(k)
+                            nv.append(v.replace("~t", ""))
+                        else:
+                            str_field.add(k)
+                            nv.append(v)
+
+                    elif type(v) is int or type(v) is float:
+                        float_sum.add(k)
+                        nv.append(float(v))
+                    elif type(v) is bool:
+                        str_field.add(k)
+                        nv.append(str(v).lower())
+                    elif type(v) is dict:
+                        str_field.add(k)
+                        nv.append(json.dumps(v))
+                    elif type(v) is list:
+                        str_field.add(k)
+                        nv.append(json.dumps(v))
+                    elif v is not None:
+                        if k not in unhandeled_prop:
+                            unhandeled_prop.add(k)
+                            logger.warning("UNHANDLED data type in %s: %s" % (k, type(v)))
+
+
+                if len(nv) == 1:
+                    new[k] = nv[0]
+                elif len(nv) > 1:
+                    new[k] = nv
+                    if type(nv[0]) is int or type(nv[0]) is float:
+                        logger.info("MULTIVALUE in field %s: %s" % (k, str(nv)))
+                    if k in float_sum and k not in str_field:
+                        logger.warning("MULTIVALUE in number field %s. Suming numbers: %s" % (k, str(nv)))
+                        new[k] = sum(nv)
+
+
+
+            except Exception as e:
+                logger.error("ERROR '%s' for %s: %s" % (str(e), k, type(v)))
+
 
         bulk_data.append(new)
+        logger.debug(json.dumps(new))
 
-    with open(file_name, 'w') as f:
+    if is_first:
+        filemode = "w"
+    else:
+        filemode = "a"
+
+    with open(file_name, filemode) as f:
         for item in float_sum:
+            f.write("%s\n" % item)
+    with open(file_name_str, filemode) as f:
+        for item in str_field:
             f.write("%s\n" % item)
 
     #store_db(clean, datatype)
-    return store_file(bulk_data, datatype,time_dim,float_sum, is_full, is_first, is_last, sequence_id, aggregate, segment, segments, intervals, write_data)
+    return store_file(bulk_data, datatype,time_dim, str_field, float_sum, is_full, append, is_first, is_last, sequence_id, aggregate, segment, segments, intervals, write_data)
 
 
 def store_db(data, datatype):
@@ -311,32 +394,35 @@ def store_db(data, datatype):
     logger.info("Sucsessfully posted data to Druid: %s" % (r.content))
     return r.content
 
-def store_file(data, datatype, time_dim, float_sum, is_full, is_first, is_last, sequence_id, aggregate, segment, segments, intervals, write_data):
-    global bulk_expose_data
+def store_file(data, datatype, time_dim, str_field, float_sum, is_full, append, is_first, is_last, sequence_id, aggregate, segment, segments, intervals, write_data):
+    global bulk_expose_data, bulk_expose_schema
     global data_location
     datatype_name = "%s-%s" % (datatype, sequence_id)
-    if is_first:
-        filemode = "w"
-    else:
-        filemode = "a"
+    datatype_name = datatype
 
     if data_location != "RAM":
+        if is_first:
+            filemode = "w"
+        else:
+            filemode = "a"
         with open(data_location + datatype_name, filemode) as f:
             for line in data:
                 json.dump(line, f, ensure_ascii=True)
                 f.write("\n")
             bulk_expose_data[datatype_name] = data_location + datatype_name
-            logger.debug("Stored data in FILE: %s" % (bulk_expose_data[datatype_name]))
+            logger.info("Stored data in FILE %s: %s lines" % (bulk_expose_data[datatype_name], len(data)))
     else:
         with io.StringIO() as f:
+            datatype_name = datatype
             for line in data:
                 json.dump(line, f, ensure_ascii=True)
                 f.write("\n")
-            if datatype_name in bulk_expose_data:
-                bulk_expose_data[datatype_name] = bulk_expose_data[datatype_name] + f.getvalue()
-            else:
+            if is_first:
                 bulk_expose_data[datatype_name] = f.getvalue()
-            logger.debug("Got data in RAM: %s" % (bulk_expose_data[datatype_name]))
+            else:
+                bulk_expose_data[datatype_name] = bulk_expose_data[datatype_name] + f.getvalue()
+            logger.info("Got data in RAM: %s bytes" % (len(bulk_expose_data[datatype_name])))
+            logger.debug(bulk_expose_data[datatype_name])
 
 
 
@@ -347,10 +433,16 @@ def store_file(data, datatype, time_dim, float_sum, is_full, is_first, is_last, 
         index_task["spec"]["dataSchema"]["granularitySpec"]["queryGranularity"] = aggregate
         index_task["spec"]["dataSchema"]["granularitySpec"]["segmentGranularity"] = segment
         index_task["spec"]["ioConfig"]["firehose"]["uris"]= ["%s?datatype=%s" % (druid_sink, datatype_name)]
-        logger.info("Setting up firehose to read from: %s" % (json.dumps(index_task["spec"]["ioConfig"]["firehose"]["uris"])))
+        app.logger.info("Setting up firehose to read from: %s" % (json.dumps(index_task["spec"]["ioConfig"]["firehose"]["uris"])))
+        for k in str_field:
+            #if k not in float_sum:
+            index_task["spec"]["dataSchema"]["parser"]["parseSpec"]["dimensionsSpec"]["dimensions"].append(k)
         for k in float_sum:
-            index_task["spec"]["dataSchema"]["metricsSpec"].append({ "type":"doubleSum", "name": k, "fieldName": k })
-        if is_full:
+            # index_task["spec"]["dataSchema"]["metricsSpec"].append({ "type":"doubleSum", "name": k, "fieldName": k })
+            if k not in str_field:
+                index_task["spec"]["dataSchema"]["parser"]["parseSpec"]["dimensionsSpec"]["dimensions"].append({ "type":"float", "name": k })
+                index_task["spec"]["dataSchema"]["metricsSpec"].append({"type": "doubleSum", "name": "sum-" + k, "fieldName": k})
+        if is_full or not append:
             index_task["spec"]["ioConfig"]["appendToExisting"] = False
         elif is_full:
             firehouse = {
@@ -368,15 +460,54 @@ def store_file(data, datatype, time_dim, float_sum, is_full, is_first, is_last, 
             firehouse["delegates"].append(index_task["spec"]["ioConfig"]["firehose"])
             index_task["spec"]["ioConfig"]["firehose"] = firehouse
 
+        r = requests.get(
+            'http://%s/druid/indexer/v1/tasks' % (druid_indexer))
+        result = r.json()
+        app.logger.info("Tasks running: %s" % (json.dumps(result)))
 
-        logger.info("Task to send to to Druid: %s" % (json.dumps(index_task)))
+
+        app.logger.info("Task to send to to Druid: %s" % (json.dumps(index_task)))
+        app.logger.debug('Post to http://%s/druid/indexer/v1/task' %(druid_indexer))
         r = requests.post('http://%s/druid/indexer/v1/task' %(druid_indexer), json=index_task)
+        app.logger.debug("Responce from Druid: %s" % (str(r)))
         result = r.json()
         if "task" in result:
-            logger.info("Success in getting Task for request sent to Druid. Responce: %s" % (r.content))
+            app.logger.info("Success in getting Task for request sent to Druid. Responce: %s" % (result))
+
+            task = result["task"]
+
+            while True:
+                r = requests.get(
+                    'http://%s/druid/indexer/v1/task/%s/status' % (druid_indexer, task))
+                if r.status_code == 200:
+                    result = r.json()
+                    app.logger.info(
+                        "Waiting for task completion for %s:  %s" % (
+                            datatype, result["status"]["status"]))
+                    sleep(30)
+                    r = requests.get(
+                        'http://%s/druid/indexer/v1/task/%s/reports' % (druid_indexer, task))
+                    if r.status_code == 200:
+                        result = r.json()
+                        app.logger.info(
+                            "Waiting for task completion for %s:  %s" % (
+                                datatype, result))
+                        if "errorMsg" in result["ingestionStatsAndErrors"]["payload"] and result["ingestionStatsAndErrors"]["payload"]["errorMsg"] is not None:
+                            app.logger.error("Problem executing task in Druid. Error: %s" % (result["ingestionStatsAndErrors"]["payload"]["errorMsg"]))
+                            abort(500, "Problem executing task in Druid. Error: %s" % (result["ingestionStatsAndErrors"]["payload"]["errorMsg"]))
+
+                        if result["ingestionStatsAndErrors"]["payload"]["ingestionState"] == "COMPLETED":
+                            break
+
+                else:
+                    app.logger.error("Problem geting task status from Druid. Responce: %s" % (r.content))
+
+                    abort(500, r.content)
+
         else:
-            logger.error("Problem with request sent to Druid. Responce: %s" % (r.content))
-            abort()
+            app.logger.error("Problem with request sent to Druid. Responce: %s" % (r.content))
+            abort(500, "Problem with request sent to Druid. Responce: %s" % (r.content))
+
 
     return datatype_name
 
@@ -390,10 +521,14 @@ if __name__ == '__main__':
     stdout_handler.setFormatter(logging.Formatter(format_string))
     logger.addHandler(stdout_handler)
 
-    # Comment these two lines if you don't want access request logging
-    app.wsgi_app = paste.translogger.TransLogger(app.wsgi_app, logger_name=logger.name,
-                                                 setup_console_handler=False)
-    logger.addHandler(stdout_handler)
+    logger.setLevel(logging.INFO)
+
+    data_location = get_var("datastore") or "/data/"
+    if data_location != "RAM":
+        if not data_location.endswith("/"):
+            data_location += "/"
+        data_location += "druid_tempfiles/"
+
 
     logger.propagate = False
     logger.setLevel(logging.INFO)
