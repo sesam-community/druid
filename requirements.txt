@@ -1,3 +1,7 @@
+iso8601==0.1.12
+cheroot==8.2.0
+CherryPy==18.3.0
+Paste==2.0.3
 Flask
 iso8601
 requests

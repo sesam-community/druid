@@ -492,7 +492,7 @@ def store_file(data, datatype, time_dim, str_field, float_sum, is_full, append, 
                         app.logger.info(
                             "Waiting for task completion for %s:  %s" % (
                                 datatype, result))
-                        if result["ingestionStatsAndErrors"]["payload"]["errorMsg"] is not None:
+                        if "errorMsg" in result["ingestionStatsAndErrors"]["payload"] and result["ingestionStatsAndErrors"]["payload"]["errorMsg"] is not None:
                             app.logger.error("Problem executing task in Druid. Error: %s" % (result["ingestionStatsAndErrors"]["payload"]["errorMsg"]))
                             abort(500, "Problem executing task in Druid. Error: %s" % (result["ingestionStatsAndErrors"]["payload"]["errorMsg"]))
 
